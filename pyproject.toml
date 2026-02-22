@@ -22,9 +22,9 @@ classifiers = [
 dynamic = ["dependencies"]
 
 [project.urls]
-Homepage = "https://github.com/REPLACE_OWNER/youcube-server"
-Repository = "https://github.com/REPLACE_OWNER/youcube-server"
-Documentation = "https://github.com/REPLACE_OWNER/youcube-server"
+Homepage = "https://github.com/noshdotzip/youcube-server"
+Repository = "https://github.com/noshdotzip/youcube-server"
+Documentation = "https://github.com/noshdotzip/youcube-server"
 
 [tool.setuptools.dynamic]
 # Pull dependencies from requirements.txt

@@ -113,4 +113,4 @@ On demand streaming and conversion service for CC: T. \
 [FFmpeg 5.1+]: https://ffmpeg.org/
 [requirements.txt]: requirements.txt
 [sanjuuni 0.6+]: https://github.com/MCJack123/sanjuuni
-[YouCube]: https://github.com/REPLACE_OWNER/youcube-client
+[YouCube]: https://github.com/noshdotzip/youcube-client

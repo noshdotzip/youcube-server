@@ -304,7 +304,7 @@ class CustomErrorHandler(ErrorHandler):
             return text(
                 "You cannot access a YouCube server directly. "
                 "You need the YouCube client. "
-                "See https://github.com/REPLACE_OWNER/youcube-client"
+                "See https://github.com/noshdotzip/youcube-client"
             )
 
         return super().default(request, exception)
