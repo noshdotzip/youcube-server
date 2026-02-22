@@ -57,15 +57,27 @@ def get_format_selectors(is_video: bool) -> tuple[str, str]:
     Primary prefers MP4/M4A when available. Fallback allows any container.
     """
     if is_video:
+        # Prefer non-HLS MP4 where possible, fallback to any protocol/container.
         primary = (
-            "worstvideo[ext=mp4]+worstaudio[ext=m4a]/"
-            "worst[ext=mp4]/worstvideo+worstaudio/worst"
+            "worstvideo[ext=mp4][protocol!=m3u8]+worstaudio[ext=m4a][protocol!=m3u8]/"
+            "worst[ext=mp4][protocol!=m3u8]/worst[protocol!=m3u8]"
         )
         fallback = "worstvideo*+worstaudio*/worst"
         return primary, fallback
-    primary = "worstaudio[ext=m4a]/worstaudio/worst"
+    # Audio: prefer non-HLS M4A, fallback to any protocol/container.
+    primary = "worstaudio[ext=m4a][protocol!=m3u8]/worstaudio[protocol!=m3u8]"
     fallback = "worstaudio*/worst"
     return primary, fallback
+
+
+HLS_RETRY_ERRORS = (
+    "fragment not found",
+    "downloaded file is empty",
+)
+
+
+def is_hls_error(exc: Exception) -> bool:
+    return any(token in str(exc).lower() for token in HLS_RETRY_ERRORS)
 
 
 def download_video(
@@ -206,6 +218,10 @@ def download(
             "extract_flat": "in_playlist",
             "progress_hooks": [my_hook],
             "logger": YTDLPLogger(),
+            "retries": 3,
+            "fragment_retries": 5,
+            "skip_unavailable_fragments": True,
+            "concurrent_fragment_downloads": 1,
         }
 
         yt_dl = YoutubeDL(yt_dl_options)
@@ -277,6 +293,11 @@ def download(
                 loop,
             )
 
+            def send_download_error(message: str):
+                run_coroutine_threadsafe(
+                    resp.send(dumps({"action": "error", "message": message})), loop
+                )
+
             try:
                 yt_dl.process_ie_result(data, download=True)
             except DownloadError as exc:
@@ -284,8 +305,42 @@ def download(
                     "Primary download failed (%s). Retrying with fallback format.",
                     exc,
                 )
-                yt_dl_fallback = YoutubeDL({**yt_dl_options, "format": fallback_format})
-                yt_dl_fallback.process_ie_result(data, download=True)
+                try:
+                    yt_dl_fallback = YoutubeDL(
+                        {**yt_dl_options, "format": fallback_format}
+                    )
+                    yt_dl_fallback.process_ie_result(data, download=True)
+                except DownloadError as exc2:
+                    if is_hls_error(exc2):
+                        logger.warning(
+                            "Fallback download failed with HLS errors (%s). "
+                            "Retrying with ffmpeg downloader.",
+                            exc2,
+                        )
+                        try:
+                            yt_dl_hls = YoutubeDL(
+                                {
+                                    **yt_dl_options,
+                                    "format": fallback_format,
+                                    "hls_prefer_native": False,
+                                    "external_downloader": "ffmpeg",
+                                    "external_downloader_args": ["-loglevel", "error"],
+                                }
+                            )
+                            yt_dl_hls.process_ie_result(data, download=True)
+                        except DownloadError as exc3:
+                            logger.warning(
+                                "Final download attempt failed (%s).", exc3
+                            )
+                            send_download_error(
+                                "Failed to download resource. Try a different URL or retry later."
+                            )
+                            raise
+                    else:
+                        send_download_error(
+                            "Failed to download resource. Try a different URL or retry later."
+                        )
+                        raise
 
         # TODO: Thread audio & video download
 
