@@ -1,0 +1,22 @@
+name: Spellcheck
+# Currently, only python is spellchecked
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/**.py"
+  pull_request:
+    paths:
+      - "src/**.py"
+
+jobs:
+  spellcheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Spellcheck
+        uses: rojopolis/spellcheck-github-actions@0.30.0

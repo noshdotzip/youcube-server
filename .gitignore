@@ -1,0 +1,9 @@
+.idea
+*.dfpwm
+*.32vid
+dictionary.dic
+*.pyc
+*.env
+*.egg-info
+dist
+venv
