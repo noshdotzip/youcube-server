@@ -9,6 +9,7 @@ Download Functionality of YC
 from asyncio import run_coroutine_threadsafe
 from os import getenv, listdir
 from os.path import abspath, dirname, join
+import re
 from tempfile import TemporaryDirectory
 
 # Local modules
@@ -49,6 +50,8 @@ DATA_FOLDER = join(dirname(abspath(__file__)), "data")
 FFMPEG_PATH = getenv("FFMPEG_PATH", "ffmpeg")
 SANJUUNI_PATH = getenv("SANJUUNI_PATH", "sanjuuni")
 DISABLE_OPENCL = bool(getenv("DISABLE_OPENCL"))
+YTDLP_COOKIES = getenv("YTDLP_COOKIES")
+YTDLP_PROXY = getenv("YTDLP_PROXY")
 
 
 def get_format_selectors(is_video: bool) -> tuple[str, str]:
@@ -73,6 +76,8 @@ def get_format_selectors(is_video: bool) -> tuple[str, str]:
 HLS_RETRY_ERRORS = (
     "fragment not found",
     "downloaded file is empty",
+    "http error 403",
+    "forbidden",
 )
 
 
@@ -80,8 +85,39 @@ def is_hls_error(exc: Exception) -> bool:
     return any(token in str(exc).lower() for token in HLS_RETRY_ERRORS)
 
 
+def select_source_file(temp_dir: str, media_id: str, prefer_video: bool) -> str | None:
+    """
+    Pick a deterministic source file from a yt-dlp download directory.
+    Prefer merged files (id.ext) over fragment-specific files (id.f123.ext).
+    """
+    files = [f for f in listdir(temp_dir) if not f.endswith(".part")]
+    if not files:
+        return None
+
+    merged_pattern = re.compile(rf"^{re.escape(media_id)}\.[^.]+$")
+    merged = [f for f in files if merged_pattern.match(f)]
+    if merged:
+        return join(temp_dir, merged[0])
+
+    video_exts = {"mp4", "mkv", "webm", "mov", "avi"}
+    audio_exts = {"m4a", "mp3", "aac", "ogg", "opus", "wav", "webm"}
+    exts = video_exts if prefer_video else audio_exts
+
+    for f in files:
+        ext = f.rsplit(".", 1)[-1].lower() if "." in f else ""
+        if ext in exts:
+            return join(temp_dir, f)
+
+    return join(temp_dir, files[0])
+
+
 def download_video(
-    temp_dir: str, media_id: str, resp: Websocket, loop, width: int, height: int
+    source_file: str,
+    media_id: str,
+    resp: Websocket,
+    loop,
+    width: int,
+    height: int,
 ):
     """
     Converts the downloaded video to 32vid
@@ -110,7 +146,7 @@ def download_video(
             "--width=" + str(width),
             "--height=" + str(height),
             "-i",
-            join(temp_dir, listdir(temp_dir)[0]),
+            source_file,
             "--raw",
             "-o",
             join(DATA_FOLDER, get_video_name(media_id, width, height)),
@@ -127,7 +163,7 @@ def download_video(
         )
 
 
-def download_audio(temp_dir: str, media_id: str, resp: Websocket, loop):
+def download_audio(source_file: str, media_id: str, resp: Websocket, loop):
     """
     Converts the downloaded audio to dfpwm
     """
@@ -151,7 +187,7 @@ def download_audio(temp_dir: str, media_id: str, resp: Websocket, loop):
         [
             FFMPEG_PATH,
             "-i",
-            join(temp_dir, listdir(temp_dir)[0]),
+            source_file,
             "-f",
             "dfpwm",
             "-ar",
@@ -218,11 +254,17 @@ def download(
             "extract_flat": "in_playlist",
             "progress_hooks": [my_hook],
             "logger": YTDLPLogger(),
+            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            "merge_output_format": "mp4",
             "retries": 3,
             "fragment_retries": 5,
             "skip_unavailable_fragments": True,
             "concurrent_fragment_downloads": 1,
         }
+        if YTDLP_COOKIES:
+            yt_dl_options["cookiefile"] = YTDLP_COOKIES
+        if YTDLP_PROXY:
+            yt_dl_options["proxy"] = YTDLP_PROXY
 
         yt_dl = YoutubeDL(yt_dl_options)
 
@@ -345,10 +387,30 @@ def download(
         # TODO: Thread audio & video download
 
         if not audio_downloaded:
-            download_audio(temp_dir, media_id, resp, loop)
+            audio_source = select_source_file(temp_dir, media_id, prefer_video=False)
+            if audio_source is None:
+                logger.warning("Audio source file not found")
+                run_coroutine_threadsafe(
+                    resp.send(
+                        dumps({"action": "error", "message": "Audio download failed."})
+                    ),
+                    loop,
+                )
+            else:
+                download_audio(audio_source, media_id, resp, loop)
 
         if not video_downloaded and is_video:
-            download_video(temp_dir, media_id, resp, loop, width, height)
+            video_source = select_source_file(temp_dir, media_id, prefer_video=True)
+            if video_source is None:
+                logger.warning("Video source file not found")
+                run_coroutine_threadsafe(
+                    resp.send(
+                        dumps({"action": "error", "message": "Video download failed."})
+                    ),
+                    loop,
+                )
+            else:
+                download_video(video_source, media_id, resp, loop, width, height)
 
     out = {
         "action": "media",
