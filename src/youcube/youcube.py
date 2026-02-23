@@ -217,6 +217,7 @@ class Actions:
             loop,
             message.get("width"),
             message.get("height"),
+            message.get("fps"),
             spotify_url_processor,
         )
         for file in files:

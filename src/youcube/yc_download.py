@@ -207,12 +207,74 @@ def download_audio(source_file: str, media_id: str, resp: Websocket, loop):
         )
 
 
+def downsample_video(
+    source_file: str, media_id: str, resp: Websocket, loop, fps: int
+) -> str:
+    """
+    Downsample the video to a target FPS before running sanjuuni.
+    Returns the path to the downsampled file, or the original on failure.
+    """
+    if fps <= 0:
+        return source_file
+
+    run_coroutine_threadsafe(
+        resp.send(
+            dumps(
+                {
+                    "action": "status",
+                    "message": f"Downsampling video to {fps} fps ...",
+                }
+            )
+        ),
+        loop,
+    )
+
+    out_file = join(dirname(source_file), f"{media_id}.fps{fps}.mp4")
+
+    if NO_COLOR:
+        prefix = "[FFmpeg]"
+    else:
+        prefix = f"{Foreground.BRIGHT_GREEN}[FFmpeg]{RESET} "
+
+    def handler(line):
+        logger.debug("%s%s", prefix, line)
+
+    returncode = run_with_live_output(
+        [
+            FFMPEG_PATH,
+            "-y",
+            "-i",
+            source_file,
+            "-vf",
+            f"fps={fps}",
+            "-an",
+            "-sn",
+            "-dn",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "32",
+            out_file,
+        ],
+        handler,
+    )
+
+    if returncode != 0:
+        logger.warning("FFmpeg downsample exited with %s", returncode)
+        return source_file
+
+    return out_file
+
+
 def download(
     url: str,
     resp: Websocket,
     loop,
     width: int,
     height: int,
+    fps: int | None,
     spotify_url_processor: SpotifyURLProcessor,
 ) -> (dict[str, any], list):
     """
@@ -220,6 +282,12 @@ def download(
     """
 
     is_video = width is not None and height is not None
+    target_fps = None
+    if fps is not None:
+        try:
+            target_fps = int(fps)
+        except (TypeError, ValueError):
+            target_fps = None
 
     # cap height and width
     if width and height:
@@ -386,6 +454,9 @@ def download(
 
         # TODO: Thread audio & video download
 
+        audio_thread = None
+        video_thread = None
+
         if not audio_downloaded:
             audio_source = select_source_file(temp_dir, media_id, prefer_video=False)
             if audio_source is None:
@@ -397,7 +468,12 @@ def download(
                     loop,
                 )
             else:
-                download_audio(audio_source, media_id, resp, loop)
+                from threading import Thread
+
+                audio_thread = Thread(
+                    target=download_audio, args=(audio_source, media_id, resp, loop)
+                )
+                audio_thread.start()
 
         if not video_downloaded and is_video:
             video_source = select_source_file(temp_dir, media_id, prefer_video=True)
@@ -410,7 +486,22 @@ def download(
                     loop,
                 )
             else:
-                download_video(video_source, media_id, resp, loop, width, height)
+                if target_fps:
+                    video_source = downsample_video(
+                        video_source, media_id, resp, loop, target_fps
+                    )
+                from threading import Thread
+
+                video_thread = Thread(
+                    target=download_video,
+                    args=(video_source, media_id, resp, loop, width, height),
+                )
+                video_thread.start()
+
+        if audio_thread:
+            audio_thread.join()
+        if video_thread:
+            video_thread.join()
 
     out = {
         "action": "media",
@@ -419,6 +510,7 @@ def download(
         "title": data.get("title"),
         "like_count": data.get("like_count"),
         "view_count": data.get("view_count"),
+        "duration": data.get("duration"),
         # "upload_date": data.get("upload_date"),
         # "tags": data.get("tags"),
         # "description": data.get("description"),
