@@ -146,16 +146,8 @@ def download_video(
         loop,
     )
 
-    if NO_COLOR:
-        prefix = "[Sanjuuni]"
-    else:
-        prefix = f"{Foreground.BRIGHT_YELLOW}[Sanjuuni]{RESET} "
-
-    def handler(line):
-        logger.debug("%s%s", prefix, line)
-        run_coroutine_threadsafe(
-            resp.send(dumps({"action": "status", "message": line})), loop
-        )
+    def handler(_line):
+        pass
 
     returncode = run_with_live_output(
         [
@@ -178,6 +170,11 @@ def download_video(
             resp.send(dumps({"action": "error", "message": "Faild to convert video!"})),
             loop,
         )
+    else:
+        run_coroutine_threadsafe(
+            resp.send(dumps({"action": "status", "message": "Video conversion done."})),
+            loop,
+        )
 
 
 def convert_video_chunk(
@@ -190,19 +187,14 @@ def convert_video_chunk(
     chunk_index: int,
     chunk_total: int,
 ):
-    message = f"Converting video chunk {chunk_index}/{chunk_total} ..."
+    message = f"Converting chunk {chunk_index}/{chunk_total} ..."
     run_coroutine_threadsafe(
         resp.send(dumps({"action": "status", "message": message})),
         loop,
     )
 
-    if NO_COLOR:
-        prefix = "[Sanjuuni]"
-    else:
-        prefix = f"{Foreground.BRIGHT_YELLOW}[Sanjuuni]{RESET} "
-
-    def handler(line):
-        logger.debug("%s%s", prefix, line)
+    def handler(_line):
+        pass
 
     returncode = run_with_live_output(
         [
@@ -222,6 +214,18 @@ def convert_video_chunk(
     if returncode != 0:
         logger.warning("Sanjuuni exited with %s", returncode)
         raise RuntimeError("Sanjuuni failed")
+    logger.info("Chunk %s/%s done", chunk_index, chunk_total)
+    run_coroutine_threadsafe(
+        resp.send(
+            dumps(
+                {
+                    "action": "status",
+                    "message": f"Chunk {chunk_index}/{chunk_total} done",
+                }
+            )
+        ),
+        loop,
+    )
 
 
 def download_audio(source_file: str, media_id: str, resp: Websocket, loop):
