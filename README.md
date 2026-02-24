@@ -23,6 +23,12 @@ Python server for downloading/converting media, plus WaveStream and API specs.
 - `YTDLP_PROXY` proxy URL for yt-dlp.
 - `SANJUUNI_CHUNK_SECONDS` enable chunking (e.g. `6`).
 - `SANJUUNI_WORKERS` concurrent sanjuuni processes.
+- `SANJUUNI_AUTO_SCALE` auto-select chunk/workers based on duration.
+- `SANJUUNI_MIN_WORKERS` minimum workers when auto-scale is enabled.
+- `SANJUUNI_MAX_WORKERS` maximum workers when auto-scale is enabled.
+- `SANJUUNI_TARGET_CHUNKS` target chunk count when auto-scale is enabled.
+- `SANJUUNI_MIN_CHUNK_SECONDS` minimum chunk size when auto-scale is enabled.
+- `SANJUUNI_MAX_CHUNK_SECONDS` maximum chunk size when auto-scale is enabled.
 - `DISABLE_OPENCL` set to `true` to disable GPU acceleration.
 
 ## Client Docs

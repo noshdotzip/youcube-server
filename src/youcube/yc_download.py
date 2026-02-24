@@ -10,6 +10,7 @@ from asyncio import run_coroutine_threadsafe
 from os import getenv, listdir
 from os.path import abspath, dirname, join
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from math import ceil
 from os import cpu_count
 from threading import Thread
 import re
@@ -57,6 +58,17 @@ YTDLP_COOKIES = getenv("YTDLP_COOKIES")
 YTDLP_PROXY = getenv("YTDLP_PROXY")
 SANJUUNI_CHUNK_SECONDS = int(getenv("SANJUUNI_CHUNK_SECONDS", "0"))
 SANJUUNI_WORKERS = int(getenv("SANJUUNI_WORKERS", str(max(1, (cpu_count() or 2) - 1))))
+SANJUUNI_AUTO_SCALE = getenv("SANJUUNI_AUTO_SCALE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+SANJUUNI_MIN_WORKERS = int(getenv("SANJUUNI_MIN_WORKERS", "1"))
+SANJUUNI_MAX_WORKERS = int(getenv("SANJUUNI_MAX_WORKERS", str(SANJUUNI_WORKERS)))
+SANJUUNI_TARGET_CHUNKS = int(getenv("SANJUUNI_TARGET_CHUNKS", "24"))
+SANJUUNI_MIN_CHUNK_SECONDS = int(getenv("SANJUUNI_MIN_CHUNK_SECONDS", "4"))
+SANJUUNI_MAX_CHUNK_SECONDS = int(getenv("SANJUUNI_MAX_CHUNK_SECONDS", "60"))
 
 
 def get_format_selectors(is_video: bool) -> tuple[str, str]:
@@ -514,6 +526,7 @@ def download(
             data = yt_dl.extract_info(data.get("id"), download=False)
 
         media_id = data.get("id")
+        duration = data.get("duration")
 
         if data.get("is_live"):
             return {"action": "error", "message": "Livestreams are not supported"}
@@ -615,6 +628,32 @@ def download(
                 )
             else:
                 chunk_seconds = SANJUUNI_CHUNK_SECONDS
+                workers = SANJUUNI_WORKERS
+                if SANJUUNI_AUTO_SCALE and duration:
+                    if duration < 120:
+                        chunk_seconds = 0
+                        workers = SANJUUNI_MIN_WORKERS
+                    else:
+                        if SANJUUNI_TARGET_CHUNKS > 0:
+                            chunk_seconds = int(
+                                round(duration / SANJUUNI_TARGET_CHUNKS)
+                            )
+                        chunk_seconds = max(
+                            SANJUUNI_MIN_CHUNK_SECONDS,
+                            min(SANJUUNI_MAX_CHUNK_SECONDS, chunk_seconds),
+                        )
+                        chunks = max(1, ceil(duration / chunk_seconds))
+                        workers = max(
+                            SANJUUNI_MIN_WORKERS,
+                            min(SANJUUNI_MAX_WORKERS, ceil(chunks / 2)),
+                        )
+                    logger.info(
+                        "Auto-scale video: duration=%ss chunk_seconds=%s workers=%s",
+                        duration,
+                        chunk_seconds,
+                        workers,
+                    )
+
                 sources = prepare_video_sources(
                     video_source, media_id, resp, loop, target_fps, chunk_seconds
                 )
@@ -629,7 +668,7 @@ def download(
                     def run_parallel():
                         try:
                             chunk_outputs = []
-                            with ThreadPoolExecutor(max_workers=SANJUUNI_WORKERS) as executor:
+                            with ThreadPoolExecutor(max_workers=workers) as executor:
                                 futures = []
                                 for idx, source in enumerate(sources, start=1):
                                     out_file = join(
