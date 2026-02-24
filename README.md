@@ -8,7 +8,7 @@ Python server for downloading/converting media, plus WaveStream and API specs.
 - `api/` AsyncAPI documentation
 
 ## Quick Start
-1. Install FFmpeg 5.1+ and sanjuuni.
+1. Install FFmpeg 5.1+ (includes `ffprobe`) and sanjuuni.
 2. Install Python dependencies: `pip install -r src/requirements.txt`.
 3. Run the server: `python src/youcube.py`.
 
@@ -31,6 +31,8 @@ Python server for downloading/converting media, plus WaveStream and API specs.
 - `SANJUUNI_MAX_CHUNK_SECONDS` maximum chunk size when auto-scale is enabled.
 - `SANJUUNI_CHUNK_FPS` force constant FPS when chunking (optional).
 - `SANJUUNI_MERGE_SKIP_FIRST_FRAME` drop first frame of each chunk to reduce stutter.
+- `SANJUUNI_VALIDATE_FRAMES` enable ffprobe validation logging after merge.
+- `FFPROBE_PATH` path to ffprobe (default: `ffprobe`).
 - `DISABLE_OPENCL` set to `true` to disable GPU acceleration.
 
 ## Client Docs

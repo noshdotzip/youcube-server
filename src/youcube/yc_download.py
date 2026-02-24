@@ -14,8 +14,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import ceil
 from os import cpu_count
 from threading import Thread
+from subprocess import PIPE, run
 import re
 from tempfile import TemporaryDirectory
+import json as json_std
 
 # Local modules
 from yc_colours import RESET, Foreground
@@ -53,6 +55,7 @@ from yt_dlp.utils import DownloadError
 
 DATA_FOLDER = join(dirname(abspath(__file__)), "data")
 FFMPEG_PATH = getenv("FFMPEG_PATH", "ffmpeg")
+FFPROBE_PATH = getenv("FFPROBE_PATH", "ffprobe")
 SANJUUNI_PATH = getenv("SANJUUNI_PATH", "sanjuuni")
 DISABLE_OPENCL = bool(getenv("DISABLE_OPENCL"))
 YTDLP_COOKIES = getenv("YTDLP_COOKIES")
@@ -72,6 +75,12 @@ SANJUUNI_MIN_CHUNK_SECONDS = int(getenv("SANJUUNI_MIN_CHUNK_SECONDS", "4"))
 SANJUUNI_MAX_CHUNK_SECONDS = int(getenv("SANJUUNI_MAX_CHUNK_SECONDS", "60"))
 SANJUUNI_CHUNK_FPS = float(getenv("SANJUUNI_CHUNK_FPS", "0"))
 SANJUUNI_MERGE_SKIP_FIRST_FRAME = getenv("SANJUUNI_MERGE_SKIP_FIRST_FRAME", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+SANJUUNI_VALIDATE_FRAMES = getenv("SANJUUNI_VALIDATE_FRAMES", "false").lower() in (
     "1",
     "true",
     "yes",
@@ -356,6 +365,8 @@ def prepare_video_sources(
         "ultrafast",
         "-crf",
         "32",
+        "-vsync",
+        "cfr",
     ]
     if chunk_seconds > 0:
         cmd += [
@@ -387,12 +398,134 @@ def prepare_video_sources(
     return segments
 
 
+def parse_fps_line(line: str) -> float | None:
+    try:
+        return float(line.strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_fraction(value: str) -> float | None:
+    if not value:
+        return None
+    if "/" in value:
+        try:
+            num, den = value.split("/", 1)
+            return float(num) / float(den)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def ffprobe_video_stats(path: str) -> dict:
+    """
+    Returns {duration: float|None, frames: int|None, avg_fps: float|None}
+    """
+    cmd = [
+        FFPROBE_PATH,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-count_frames",
+        "-show_entries",
+        "stream=nb_read_frames,avg_frame_rate",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "json",
+        path,
+    ]
+    try:
+        result = run(cmd, stdout=PIPE, stderr=PIPE, text=True, check=False)
+    except Exception as exc:
+        logger.warning("ffprobe failed to start: %s", exc)
+        return {"duration": None, "frames": None, "avg_fps": None}
+
+    if result.returncode != 0:
+        logger.warning("ffprobe failed (%s): %s", result.returncode, result.stderr)
+        return {"duration": None, "frames": None, "avg_fps": None}
+
+    try:
+        data = json_std.loads(result.stdout)
+    except Exception as exc:
+        logger.warning("ffprobe output parse failed: %s", exc)
+        return {"duration": None, "frames": None, "avg_fps": None}
+
+    duration = None
+    frames = None
+    avg_fps = None
+    fmt = data.get("format") or {}
+    streams = data.get("streams") or []
+    if fmt.get("duration"):
+        duration = parse_fraction(fmt.get("duration"))
+    if streams:
+        stream = streams[0]
+        avg_fps = parse_fraction(stream.get("avg_frame_rate"))
+        nb_read_frames = stream.get("nb_read_frames")
+        try:
+            frames = int(nb_read_frames) if nb_read_frames is not None else None
+        except (TypeError, ValueError):
+            frames = None
+
+    return {"duration": duration, "frames": frames, "avg_fps": avg_fps}
+
+
+def log_frame_validation(
+    source_file: str,
+    merged_frames: int | None,
+    merged_fps: float | None,
+    yt_duration: float | None,
+    target_fps: int | None,
+):
+    stats = ffprobe_video_stats(source_file)
+    duration = stats.get("duration") or yt_duration
+    source_frames = stats.get("frames")
+    source_fps = stats.get("avg_fps")
+    effective_fps = (
+        float(target_fps)
+        if target_fps and target_fps > 0
+        else (merged_fps or source_fps)
+    )
+    expected_frames = None
+    if duration and effective_fps:
+        expected_frames = round(duration * effective_fps)
+
+    logger.info(
+        "Frame validation: source=%s duration=%.3fs src_frames=%s src_fps=%s "
+        "merged_frames=%s merged_fps=%s expected_frames=%s",
+        source_file,
+        duration if duration is not None else -1,
+        source_frames,
+        f"{source_fps:.3f}" if source_fps else None,
+        merged_frames,
+        f"{merged_fps:.3f}" if merged_fps else None,
+        expected_frames,
+    )
+
+    if expected_frames is not None and merged_frames is not None:
+        delta = merged_frames - expected_frames
+        if abs(delta) > max(2, int(0.005 * expected_frames)):
+            logger.warning(
+                "Frame validation mismatch: merged=%s expected=%s (delta=%s)",
+                merged_frames,
+                expected_frames,
+                delta,
+            )
+
+
 def merge_32vid_chunks(
     chunk_files: list[str],
     out_file: str,
     resp: Websocket,
     loop,
-):
+    chunk_seconds: int,
+    expected_duration: float | None,
+    expected_fps: float | None,
+) -> tuple[int, float | None]:
     run_coroutine_threadsafe(
         resp.send(
             dumps(
@@ -423,6 +556,11 @@ def merge_32vid_chunks(
     )
     with open(out_file, "w", encoding="utf-8") as out_f:
         first = True
+        total_written = 0
+        fps_value = expected_fps
+        total_expected = None
+        if expected_duration and expected_fps and expected_fps > 0:
+            total_expected = round(expected_duration * expected_fps)
         for idx, chunk in enumerate(chunk_files, start=1):
             with open(chunk, "r", encoding="utf-8") as in_f:
                 if first:
@@ -430,21 +568,51 @@ def merge_32vid_chunks(
                     fps_line = in_f.readline()
                     out_f.write(header)
                     out_f.write(fps_line)
+                    file_fps = parse_fps_line(fps_line)
+                    if not fps_value:
+                        fps_value = file_fps
+                    elif file_fps and abs(file_fps - fps_value) > 0.01:
+                        logger.warning(
+                            "Chunk fps %.3f differs from expected %.3f",
+                            file_fps,
+                            fps_value,
+                        )
+                    if expected_duration and fps_value and fps_value > 0:
+                        total_expected = round(expected_duration * fps_value)
                     first = False
                 else:
                     # skip header and fps line
                     in_f.readline()
                     in_f.readline()
-                skipped_frame = False
+
+                expected_frames = None
+                if fps_value and fps_value > 0:
+                    if total_expected is not None and idx == len(chunk_files):
+                        expected_frames = max(total_expected - total_written, 0)
+                    elif chunk_seconds > 0:
+                        expected_frames = round(chunk_seconds * fps_value)
+
+                skipped_first = False
+                last_frame = None
+                chunk_written = 0
                 for line in in_f:
-                    if line == "":
+                    if not line or line == "\n":
                         continue
-                    if line == "\n":
+                    if SANJUUNI_MERGE_SKIP_FIRST_FRAME and idx > 1 and not skipped_first:
+                        skipped_first = True
                         continue
-                    if SANJUUNI_MERGE_SKIP_FIRST_FRAME and not skipped_frame and idx > 1:
-                        skipped_frame = True
+                    if expected_frames is not None and chunk_written >= expected_frames:
                         continue
                     out_f.write(line)
+                    total_written += 1
+                    chunk_written += 1
+                    last_frame = line
+
+                if expected_frames is not None and last_frame:
+                    while chunk_written < expected_frames:
+                        out_f.write(last_frame)
+                        total_written += 1
+                        chunk_written += 1
             logger.info("Merged chunk %s/%s", idx, len(chunk_files))
             print(f"[YouCube] Merged chunk {idx}/{len(chunk_files)}", flush=True)
             run_coroutine_threadsafe(
@@ -458,11 +626,18 @@ def merge_32vid_chunks(
                 ),
                 loop,
             )
-    logger.info("Merge complete: %s", out_file)
+    logger.info(
+        "Merge complete: %s (frames=%s, fps=%s, expected=%s)",
+        out_file,
+        total_written,
+        fps_value,
+        total_expected,
+    )
     print(f"[YouCube] Merge complete: {out_file}", flush=True)
     run_coroutine_threadsafe(
         resp.send(dumps({"action": "status", "message": "Merge complete"})), loop
     )
+    return total_written, fps_value
 
 
 def download(
@@ -755,14 +930,25 @@ def download(
                                 for future in as_completed(futures):
                                     future.result()
 
-                            merge_32vid_chunks(
+                            merged_frames, merged_fps = merge_32vid_chunks(
                                 chunk_outputs,
                                 join(
                                     DATA_FOLDER, get_video_name(media_id, width, height)
                                 ),
                                 resp,
                                 loop,
+                                chunk_seconds,
+                                duration,
+                                target_fps,
                             )
+                            if SANJUUNI_VALIDATE_FRAMES:
+                                log_frame_validation(
+                                    video_source,
+                                    merged_frames,
+                                    merged_fps,
+                                    duration,
+                                    target_fps,
+                                )
                         except Exception as exc:
                             logger.warning("Parallel video conversion failed: %s", exc)
                             run_coroutine_threadsafe(
