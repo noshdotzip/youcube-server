@@ -29,6 +29,8 @@ Python server for downloading/converting media, plus WaveStream and API specs.
 - `SANJUUNI_TARGET_CHUNKS` target chunk count when auto-scale is enabled.
 - `SANJUUNI_MIN_CHUNK_SECONDS` minimum chunk size when auto-scale is enabled.
 - `SANJUUNI_MAX_CHUNK_SECONDS` maximum chunk size when auto-scale is enabled.
+- `SANJUUNI_CHUNK_FPS` force constant FPS when chunking (optional).
+- `SANJUUNI_MERGE_SKIP_FIRST_FRAME` drop first frame of each chunk to reduce stutter.
 - `DISABLE_OPENCL` set to `true` to disable GPU acceleration.
 
 ## Client Docs

@@ -70,6 +70,13 @@ SANJUUNI_MAX_WORKERS = int(getenv("SANJUUNI_MAX_WORKERS", str(SANJUUNI_WORKERS))
 SANJUUNI_TARGET_CHUNKS = int(getenv("SANJUUNI_TARGET_CHUNKS", "24"))
 SANJUUNI_MIN_CHUNK_SECONDS = int(getenv("SANJUUNI_MIN_CHUNK_SECONDS", "4"))
 SANJUUNI_MAX_CHUNK_SECONDS = int(getenv("SANJUUNI_MAX_CHUNK_SECONDS", "60"))
+SANJUUNI_CHUNK_FPS = float(getenv("SANJUUNI_CHUNK_FPS", "0"))
+SANJUUNI_MERGE_SKIP_FIRST_FRAME = getenv("SANJUUNI_MERGE_SKIP_FIRST_FRAME", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 
 def get_format_selectors(is_video: bool) -> tuple[str, str]:
@@ -280,6 +287,7 @@ def prepare_video_sources(
     loop,
     fps: int | None,
     chunk_seconds: int,
+    source_fps: float | None,
 ) -> list[str]:
     """
     Optionally downsample and/or split the video into chunks.
@@ -321,14 +329,23 @@ def prepare_video_sources(
     else:
         out_pattern = join(out_dir, f"{media_id}.prepared.mp4")
 
+    effective_fps = None
+    if fps and fps > 0:
+        effective_fps = fps
+    elif chunk_seconds > 0:
+        if source_fps and source_fps > 0:
+            effective_fps = source_fps
+        elif SANJUUNI_CHUNK_FPS and SANJUUNI_CHUNK_FPS > 0:
+            effective_fps = SANJUUNI_CHUNK_FPS
+
     cmd = [
         FFMPEG_PATH,
         "-y",
         "-i",
         source_file,
     ]
-    if fps and fps > 0:
-        cmd += ["-vf", f"fps={fps}"]
+    if effective_fps:
+        cmd += ["-vf", f"fps={effective_fps}"]
     cmd += [
         "-an",
         "-sn",
@@ -418,10 +435,14 @@ def merge_32vid_chunks(
                     # skip header and fps line
                     in_f.readline()
                     in_f.readline()
+                skipped_frame = False
                 for line in in_f:
                     if line == "":
                         continue
                     if line == "\n":
+                        continue
+                    if SANJUUNI_MERGE_SKIP_FIRST_FRAME and not skipped_frame and idx > 1:
+                        skipped_frame = True
                         continue
                     out_f.write(line)
             logger.info("Merged chunk %s/%s", idx, len(chunk_files))
@@ -691,7 +712,13 @@ def download(
                     )
 
                 sources = prepare_video_sources(
-                    video_source, media_id, resp, loop, target_fps, chunk_seconds
+                    video_source,
+                    media_id,
+                    resp,
+                    loop,
+                    target_fps,
+                    chunk_seconds,
+                    data.get("fps"),
                 )
 
                 def run_single():
