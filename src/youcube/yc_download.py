@@ -390,9 +390,10 @@ def merge_32vid_chunks(
     if not chunk_files:
         raise RuntimeError("No 32vid chunks to merge")
 
+    logger.info("Merging %s chunks into %s", len(chunk_files), out_file)
     with open(out_file, "w", encoding="utf-8") as out_f:
         first = True
-        for chunk in chunk_files:
+        for idx, chunk in enumerate(chunk_files, start=1):
             with open(chunk, "r", encoding="utf-8") as in_f:
                 if first:
                     header = in_f.readline()
@@ -410,6 +411,8 @@ def merge_32vid_chunks(
                     if line == "\n":
                         continue
                     out_f.write(line)
+            logger.info("Merged chunk %s/%s", idx, len(chunk_files))
+    logger.info("Merge complete: %s", out_file)
 
 
 def download(
