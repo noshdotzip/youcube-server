@@ -391,6 +391,17 @@ def merge_32vid_chunks(
         raise RuntimeError("No 32vid chunks to merge")
 
     logger.info("Merging %s chunks into %s", len(chunk_files), out_file)
+    run_coroutine_threadsafe(
+        resp.send(
+            dumps(
+                {
+                    "action": "status",
+                    "message": f"Merging {len(chunk_files)} chunks ...",
+                }
+            )
+        ),
+        loop,
+    )
     with open(out_file, "w", encoding="utf-8") as out_f:
         first = True
         for idx, chunk in enumerate(chunk_files, start=1):
@@ -412,7 +423,21 @@ def merge_32vid_chunks(
                         continue
                     out_f.write(line)
             logger.info("Merged chunk %s/%s", idx, len(chunk_files))
+            run_coroutine_threadsafe(
+                resp.send(
+                    dumps(
+                        {
+                            "action": "status",
+                            "message": f"Merged chunk {idx}/{len(chunk_files)}",
+                        }
+                    )
+                ),
+                loop,
+            )
     logger.info("Merge complete: %s", out_file)
+    run_coroutine_threadsafe(
+        resp.send(dumps({"action": "status", "message": "Merge complete"})), loop
+    )
 
 
 def download(
