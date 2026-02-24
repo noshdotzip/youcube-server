@@ -7,6 +7,7 @@ Download Functionality of YC
 
 # Built-in modules
 from asyncio import run_coroutine_threadsafe
+import sys
 from os import getenv, listdir
 from os.path import abspath, dirname, join
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -391,6 +392,7 @@ def merge_32vid_chunks(
         raise RuntimeError("No 32vid chunks to merge")
 
     logger.info("Merging %s chunks into %s", len(chunk_files), out_file)
+    print(f"[YouCube] Merging {len(chunk_files)} chunks into {out_file}", flush=True)
     run_coroutine_threadsafe(
         resp.send(
             dumps(
@@ -423,6 +425,7 @@ def merge_32vid_chunks(
                         continue
                     out_f.write(line)
             logger.info("Merged chunk %s/%s", idx, len(chunk_files))
+            print(f"[YouCube] Merged chunk {idx}/{len(chunk_files)}", flush=True)
             run_coroutine_threadsafe(
                 resp.send(
                     dumps(
@@ -435,6 +438,7 @@ def merge_32vid_chunks(
                 loop,
             )
     logger.info("Merge complete: %s", out_file)
+    print(f"[YouCube] Merge complete: {out_file}", flush=True)
     run_coroutine_threadsafe(
         resp.send(dumps({"action": "status", "message": "Merge complete"})), loop
     )
