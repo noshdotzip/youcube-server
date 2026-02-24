@@ -12,5 +12,21 @@ Python server for downloading/converting media, plus WaveStream and API specs.
 2. Install Python dependencies: `pip install -r src/requirements.txt`.
 3. Run the server: `python src/youcube.py`.
 
+## Features
+- yt-dlp with HLS fallbacks and ffmpeg downloader.
+- Optional cookies/proxy support.
+- Server-side FPS downsample (requested by client).
+- Optional parallel sanjuuni chunking.
+
+## Env Vars
+- `YTDLP_COOKIES` path to a cookies file for yt-dlp.
+- `YTDLP_PROXY` proxy URL for yt-dlp.
+- `SANJUUNI_CHUNK_SECONDS` enable chunking (e.g. `6`).
+- `SANJUUNI_WORKERS` concurrent sanjuuni processes.
+- `DISABLE_OPENCL` set to `true` to disable GPU acceleration.
+
+## Client Docs
+https://github.com/noshdotzip/youcube-client#readme
+
 ## Legacy Docs
 See `README.legacy.md` for upstream details (environment variables, Docker, etc.).
